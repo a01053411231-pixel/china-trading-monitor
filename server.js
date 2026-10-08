@@ -14,24 +14,22 @@ const SYMBOLS = [
 
 app.use(cors());
 
-async function api(path, params = {}) {
-  if (!KEY) throw new Error("FINNHUB_API_KEY가 없습니다.");
-
-  const url = new URL("https://finnhub.io/api/v1/" + path);
-
-  Object.entries(params).forEach(([k, v]) =>
-    url.searchParams.set(k, v)
-  );
-
-  url.searchParams.set("token", KEY);
+async function getQuote(symbol) {
+  const url =
+    "https://finnhub.io/api/v1/quote?symbol=" +
+    symbol + "&token=" + KEY;
 
   const r = await fetch(url);
 
-  if (!r.ok) {
-    throw new Error("Finnhub 오류: " + r.status);
-  }
+  if (!r.ok) throw new Error("Finnhub 오류 " + r.status);
 
-  return r.json();
+  const q = await r.json();
+
+  return {
+    symbol: symbol,
+    price: Number(q.c || 0),
+    change: Number(q.dp || 0)
+  };
 }
 
 app.get("/", (req, res) => {
@@ -46,39 +44,30 @@ content="width=device-width,initial-scale=1">
 
 <style>
 body{
- margin:0;
- background:#07111f;
- color:white;
- font-family:Arial,sans-serif;
+margin:0;
+background:#07111f;
+color:white;
+font-family:Arial;
 }
 header{
- padding:22px;
- text-align:center;
- background:#111c2e;
+padding:22px;
+text-align:center;
+background:#111c2e;
 }
-.green{color:#22c55e;font-weight:bold}
-.yellow{color:#facc15}
+.green{color:#22c55e}
 .card{
- background:#111c2e;
- border-radius:14px;
- padding:16px;
- margin:12px;
+background:#111c2e;
+margin:12px;
+padding:16px;
+border-radius:14px;
 }
 .row{
- display:grid;
- grid-template-columns:60px 1fr 1fr;
- gap:8px;
- padding:11px 0;
- border-bottom:1px solid #26344b;
+display:flex;
+justify-content:space-between;
+padding:10px 0;
+border-bottom:1px solid #26344b;
 }
 .up{color:#22c55e}
-button{
- background:#2563eb;
- color:white;
- border:0;
- border-radius:10px;
- padding:10px 15px;
-}
 </style>
 </head>
 
@@ -94,8 +83,6 @@ button{
 <p>상승률 ≥ 1%</p>
 <p>거래량 급증 ≥ 3배</p>
 <p>거래대금 ≥ $100M</p>
-<button onclick="load()">🔄 새로고침</button>
-<p id="time">데이터 확인 중...</p>
 </div>
 
 <div class="card">
@@ -109,54 +96,42 @@ button{
 </div>
 
 <script>
+async function load(){
 
-function load(){
+const r = await fetch("/api/stocks");
+const data = await r.json();
 
- fetch("/api/stocks")
- .then(r=>r.json())
- .then(data=>{
+if(data.error){
+document.getElementById("alerts").innerHTML =
+"⚠️ " + data.error;
+return;
+}
 
-   document.getElementById("time").innerText =
-     "마지막 확인: " + new Date().toLocaleTimeString();
+const alerts = data.stocks.filter(x => x.change >= 1);
 
-   if(data.error){
+document.getElementById("alerts").innerHTML =
+alerts.length
+? alerts.map(x =>
+"🚨 " + x.symbol +
+" 상승 " + x.change.toFixed(2) + "%"
+).join("<br>")
+: "현재 1% 이상 상승 종목 없음";
 
-     document.getElementById("alerts").innerHTML =
-       '<span class="yellow">⚠️ '+data.error+'</span>';
-
-     return;
-   }
-
-   const alerts =
-     data.stocks.filter(x => x.change >= 1);
-
-   document.getElementById("alerts").innerHTML =
-     alerts.length
-     ? alerts.map(x =>
-       "🚨 <b>"+x.symbol+
-       "</b> 상승 "+x.change.toFixed(2)+"%"
-       ).join("<br>")
-     : "현재 1% 이상 상승 종목 없음";
-
-   document.getElementById("stocks").innerHTML =
-     data.stocks.map(x =>
-       '<div class="row">'+
-       '<b>'+x.symbol+'</b>'+
-       '<span>$'+x.price.toFixed(2)+'</span>'+
-       '<span class="'+
-       (x.change >= 0 ? "up" : "")+
-       '">'+x.change.toFixed(2)+'%</span>'+
-       '</div>'
-     ).join("");
-
- });
+document.getElementById("stocks").innerHTML =
+data.stocks.map(x =>
+'<div class="row">' +
+"<b>" + x.symbol + "</b>" +
+"<span>$" + x.price.toFixed(2) + "</span>" +
+'<span class="' +
+(x.change >= 0 ? "up" : "") +
+'">' + x.change.toFixed(2) + "%</span>" +
+"</div>"
+).join("");
 
 }
 
 load();
-
 setInterval(load,30000);
-
 </script>
 
 </body>
@@ -164,16 +139,41 @@ setInterval(load,30000);
 `);
 });
 
-app.get("/api/stocks", async (req,res)=>{
+app.get("/api/stocks", async (req, res) => {
 
- try{
+try {
 
-   const stocks = await Promise.all(
+if (!KEY) {
+throw new Error("FINNHUB_API_KEY가 없습니다.");
+}
 
-     SYMBOLS.map(async symbol=>{
+const stocks = await Promise.all(
+SYMBOLS.map(getQuote)
+);
 
-       const q = await api("quote",{symbol});
+res.json({
+stocks: stocks,
+error: ""
+});
 
-       return {
-         symbol,
-         price:Number(q.c
+} catch (e) {
+
+res.json({
+stocks: [],
+error: e.message
+});
+
+}
+
+});
+
+app.get("/health", (req,res) => {
+res.json({
+status: "healthy",
+apiConfigured: Boolean(KEY)
+});
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+console.log("Server running on port " + PORT);
+});
